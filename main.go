@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"A
+	"io/ioutil"
 	"os"
 )
 
