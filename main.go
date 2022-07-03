@@ -6,39 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 )
 
-type Arguments map[string]string
-
-const (
-	idFlag        = "id"
-	itemFlag      = "item"
-	operationFlag = "operation"
-	filenameFlag  = "fileName"
+var (
+	operationMissingErr = errors.New("-operation flag has to be specified")
+	fileNameMissingErr  = errors.New("-fileName flag has to be specified")
+	idMissingErr        = errors.New("-id flag has to be specified")
+	itemMissingErr      = errors.New("-item flag has to be specified")
 )
-
-const (
-	opAdd      = "add"
-	opList     = "list"
-	opFindById = "findById"
-	opRemove   = "remove"
-)
-
-var _ = flag.String(idFlag, "", "user id")
-var _ = flag.String(itemFlag, "", "user json payload")
-var _ = flag.String(operationFlag, "", "operation to be performed")
-var _ = flag.String(filenameFlag, "", "path to json file")
-
-func parseArgs() Arguments {
-	flag.Parse()
-	result := Arguments{}
-	flag.Visit(func(flag *flag.Flag) {
-		result[flag.Name] = flag.Value.String()
-	})
-	return result
-}
 
 type User struct {
 	Id    string `json:"id"`
@@ -46,170 +22,36 @@ type User struct {
 	Age   int    `json:"age"`
 }
 
-func readUsers(args Arguments) ([]User, error) {
-	filename := args[filenameFlag]
-	if filename == "" {
-		return nil, fmt.Errorf("-fileName flag has to be specified")
-	}
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	var users []User
-	err = json.Unmarshal(data, &users)
-	if err != nil {
-		return nil, err
-	}
-	return users, nil
-}
-
-func writeUsers(users []User, writer io.Writer) error {
-	data, err := json.Marshal(users)
-	if err != nil {
-		return err
-	}
-	_, err = writer.Write(data)
-	return err
-	//return json.NewEncoder(writer).Encode(users)  - appends with '\n', tests do not match
-}
-
-func writeUsersToFile(args Arguments, users []User) error {
-	filename := args[filenameFlag]
-	if filename == "" {
-		return fmt.Errorf("-fileName flag has to be specified")
-	}
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			panic(err)
-		}
-	}(file)
-	return writeUsers(users, file)
-}
-
-func doFindById(users []User, id string) int {
-	for i, user := range users {
-		if user.Id == id {
-			return i
-		}
-	}
-	return -1
-}
-
-func add(args Arguments, writer io.Writer) error {
-	item := args[itemFlag]
-	if item == "" {
-		return fmt.Errorf("-item flag has to be specified")
-	}
-	var user User
-	err := json.Unmarshal([]byte(item), &user)
-	if err != nil {
-		return err
-	}
-	users, err := readUsers(args)
-	if err != nil {
-		return err
-	}
-	if doFindById(users, user.Id) >= 0 {
-		_, err = fmt.Fprintf(writer, "Item with id %s already exists", user.Id)
-		if err != nil {
-			panic(err)
-		}
-		return nil
-	}
-	users = append(users, user)
-	return writeUsersToFile(args, users)
-}
-
-func list(args Arguments, writer io.Writer) error {
-	users, err := readUsers(args)
-	if err != nil {
-		return err
-	}
-	if len(users) == 0 {
-		return nil
-	}
-	return writeUsers(users, writer)
-}
-
-func findById(args Arguments, writer io.Writer) error {
-	id := args[idFlag]
-	if id == "" {
-		return fmt.Errorf("-id flag has to be specified")
-	}
-	users, err := readUsers(args)
-	if err != nil {
-		return err
-	}
-
-	found := doFindById(users, id)
-	if found < 0 {
-		return nil
-	}
-	data, err := json.Marshal(users[found])
-	if err != nil {
-		return err
-	}
-	_, err = writer.Write(data)
-	return err
-}
-
-func remove(args Arguments, writer io.Writer) error {
-	id := args[idFlag]
-	if id == "" {
-		return fmt.Errorf("-id flag has to be specified")
-	}
-	users, err := readUsers(args)
-	if err != nil {
-		return err
-	}
-
-	found := doFindById(users, id)
-	if found < 0 {
-		_, err = fmt.Fprintf(writer, "Item with id %s not found", id)
-		if err != nil {
-			panic(err)
-		}
-		return nil
-	}
-	result := make([]User, 0, len(users)-1)
-	for _, user := range users {
-		if user.Id != id {
-			result = append(result, user)
-		}
-	}
-	return writeUsersToFile(args, result)
-}
+type Arguments map[string]string
 
 func Perform(args Arguments, writer io.Writer) error {
-	op, ok := args[operationFlag]
-	if !ok || op == "" {
-		return fmt.Errorf("-operation flag has to be specified")
+	if args["operation"] == "add" {
+		err := AddNewItem(args, writer)
+		if err != nil {
+			return err
+		}
+	} else if args["operation"] == "list" {
+		err := GetInfo(args, writer)
+		if err != nil {
+			return err
+		}
+	} else if args["operation"] == "findById" {
+		err := FindByID(args, writer)
+		if err != nil {
+			return err
+		}
+	} else if args["operation"] == "remove" {
+		err := RemoveUser(args, writer)
+		if err != nil {
+			return err
+		}
+	} else if len(args["operation"]) == 0 {
+		return operationMissingErr
+	} else {
+		return fmt.Errorf("Operation %s not allowed!", args["operation"])
 	}
 
-	switch op {
-	case opAdd:
-		return add(args, writer)
-	case opList:
-		return list(args, writer)
-	case opFindById:
-		return findById(args, writer)
-	case opRemove:
-		return remove(args, writer)
-	default:
-		//goland:noinspection GoErrorStringFormat
-		return fmt.Errorf("Operation %v not allowed!", op)
-	}
+	return nil
 }
 
 func main() {
@@ -217,4 +59,199 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func parseArgs() Arguments {
+	_ = os.Args[1:]
+	id := flag.String("id", "", "chose user id")
+	inputBody := flag.String("item", "", "body for add")
+	choseOperation := flag.String("operation", "", "chose operation")
+	choseFile := flag.String("fileName", "", "chose file")
+	flag.Parse()
+	mp := Arguments{}
+	mp["id"] = *id
+	mp["operation"] = *choseOperation
+	mp["item"] = *inputBody
+	mp["fileName"] = *choseFile
+	return mp
+}
+
+func GetInfo(args Arguments, writer io.Writer) error {
+	fileName := args["fileName"]
+	if len(fileName) == 0 {
+		return fileNameMissingErr
+	}
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	writer.Write(data)
+	return nil
+}
+
+func AddNewItem(args Arguments, writer io.Writer) error {
+	fileName := args["fileName"]
+	item := args["item"]
+	if len(fileName) == 0 {
+		return fileNameMissingErr
+	}
+	if len(item) == 0 {
+		return itemMissingErr
+	}
+	input := User{}
+	oldData := []User{}
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	err = json.Unmarshal([]byte(item), &input)
+	if err != nil {
+		return err
+	}
+	if check := IsValid(input); !check {
+		return errors.New("invalid input")
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	if len(data) != 0 {
+		err = json.Unmarshal(data, &oldData)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, i := range oldData {
+		if i.Id == input.Id {
+			str := fmt.Sprintf("Item with id %s already exists", input.Id)
+			writer.Write([]byte(str))
+			return nil
+			// return errors.New(str)
+		}
+	}
+	oldData = append(oldData, input)
+	out, err := json.Marshal(oldData)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(fileName, out, 0644)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func RemoveUser(args Arguments, writer io.Writer) error {
+	fileName := args["fileName"]
+	id := args["id"]
+	fileBody := []User{}
+	check := false
+	newData := []User{}
+	if len(fileName) == 0 {
+		return fileNameMissingErr
+	}
+	if len(id) == 0 {
+		return idMissingErr
+	}
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(data, &fileBody)
+	if err != nil {
+		return err
+	}
+	for _, i := range fileBody {
+		if i.Id == id {
+			check = true
+		} else if i.Id != id {
+			newData = append(newData, i)
+		}
+	}
+	if !check {
+		str := fmt.Sprintf("Item with id %s not found", id)
+		writer.Write([]byte(str))
+		return nil
+	}
+	afterRemove, err := json.Marshal(newData)
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(fileName, afterRemove, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return nil
+}
+
+func FindByID(args Arguments, writer io.Writer) error {
+	input := []User{}
+	id := args["id"]
+	fileName := args["fileName"]
+	if len(id) == 0 {
+		return idMissingErr
+	}
+	if len(fileName) == 0 {
+		return fileNameMissingErr
+	}
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(data, &input)
+	if err != nil {
+		return err
+	}
+	ind := 0
+	check := false
+	for index, i := range input {
+		if id == i.Id {
+			ind = index
+			check = true
+		}
+	}
+	if !check {
+		writer.Write([]byte(""))
+		return nil
+	}
+	out, err := json.Marshal(input[ind])
+	if err != nil {
+		return err
+	}
+	writer.Write(out)
+	return nil
+}
+
+func IsValid(u User) bool {
+	if u.Age == 0 {
+		return false
+	}
+	if len(u.Email) == 0 {
+		return false
+	}
+	if len(u.Id) == 0 {
+		return false
+	}
+	return true
 }
